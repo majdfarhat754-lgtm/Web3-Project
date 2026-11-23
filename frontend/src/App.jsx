@@ -1,41 +1,55 @@
-import { useState, useEffect } from 'react';
-import axios from 'axios';
-import './App.css';
+import React, { useState, useEffect, useRef } from 'react';
 
-const API_BASE = 'http://127.0.0.1:8000/api';
+const API_BASE = 'http://127.0.0.1:8000';
 
-function App() {
+export default function App() {
   const [cars, setCars] = useState([]);
-  const [filterStatus, setFilterStatus] = useState('available');
-  const [searchTerm, setSearchTerm] = useState('');
-  
-  const [selectedCar, setSelectedCar] = useState(null);
-  const [actionType, setActionType] = useState('BUY');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [filter, setFilter] = useState('AVAILABLE');
+  const collectionRef = useRef(null);
 
-  const [customerId, setCustomerId] = useState(null);
-  const [isReturning, setIsReturning] = useState(false);
-  const [lookupMessage, setLookupMessage] = useState('');
-  const [customerForm, setCustomerForm] = useState({
-    first_name: '',
-    last_name: '',
-    email: '',
+  const [selectedCar, setSelectedCar] = useState(null);
+  const [actionType, setActionType] = useState(null);
+  const [paperworkSubmitted, setPaperworkSubmitted] = useState(false);
+  const [paperworkForm, setPaperworkForm] = useState({
+    fullName: '',
     phone: '',
+    licenseOrId: '',
     address: '',
+    paymentMethod: 'Bank Transfer',
+    rentalDays: 3,
+    pickupDate: '',
+    agreedToTerms: false,
   });
 
-  const [paymentMethod, setPaymentMethod] = useState('Credit Card');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-
-  const [receipt, setReceipt] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [testDriveForm, setTestDriveForm] = useState({
+    carId: '',
+    fullName: '',
+    phone: '',
+    email: '',
+    preferredDate: '',
+    preferredTime: '10:00 AM',
+  });
+  const [testDriveSuccess, setTestDriveSuccess] = useState(false);
 
   const fetchCars = async () => {
     try {
-      const res = await axios.get(`${API_BASE}/cars/`);
-      setCars(res.data);
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/api/cars/`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      console.log('Django /api/cars/ response:', data);
+      const list = Array.isArray(data) ? data : data.results || [];
+      setCars(list);
+      setError('');
     } catch (err) {
-      console.error('Error fetching cars:', err);
+      console.error('Fetch error:', err);
+      setError(
+        `Could not load cars from ${API_BASE}/api/cars/ (${err.message}). Make sure Django is running and CORS is enabled.`
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -43,296 +57,497 @@ function App() {
     fetchCars();
   }, []);
 
-  const handleSelectCar = (car, type) => {
+  const getCarImage = (car) => {
+    const raw = car.image_url || car.image || car.photo || '';
+    if (!raw) return '/cars/placeholder.jpg';
+    if (raw.startsWith('http') || raw.startsWith('/cars/')) return raw;
+    return `${API_BASE}${raw.startsWith('/') ? '' : '/'}${raw}`;
+  };
+
+  const scrollToCollection = () => {
+    collectionRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const openModal = (car, type) => {
     setSelectedCar(car);
     setActionType(type);
-    setReceipt(null);
-    setCustomerId(null);
-    setIsReturning(false);
-    setLookupMessage('');
-    setStartDate('');
-    setEndDate('');
-    setCustomerForm({
-      first_name: '',
-      last_name: '',
-      email: '',
+    setPaperworkSubmitted(false);
+    setPaperworkForm({
+      fullName: '',
       phone: '',
+      licenseOrId: '',
       address: '',
+      paymentMethod: 'Bank Transfer',
+      rentalDays: 3,
+      pickupDate: '',
+      agreedToTerms: false,
     });
   };
 
-  const handleCustomerLookup = async () => {
-    if (!customerForm.email) return;
-    try {
-      const res = await axios.get(`${API_BASE}/customers/lookup/?email=${customerForm.email}`);
-      setCustomerId(res.data.customer_id);
-      setCustomerForm({
-        first_name: res.data.first_name,
-        last_name: res.data.last_name,
-        email: res.data.email,
-        phone: res.data.phone,
-        address: res.data.address,
-      });
-      setIsReturning(true);
-      setLookupMessage('Welcome back! Your saved details have been filled automatically.');
-    } catch (err) {
-      setCustomerId(null);
-      setIsReturning(false);
-      setLookupMessage('New customer — please fill in your details below.');
-    }
+  const closeModal = () => {
+    setSelectedCar(null);
+    setActionType(null);
   };
 
-  const calculateEstimatedBill = () => {
-    if (!selectedCar) return 0;
-    if (actionType === 'BUY') return parseFloat(selectedCar.price);
-    if (startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      const days = Math.max(Math.ceil((end - start) / (1000 * 60 * 60 * 24)), 1);
-      return days * parseFloat(selectedCar.rent_price_per_day);
-    }
-    return parseFloat(selectedCar.rent_price_per_day);
-  };
-
-  const handleCheckout = async (e) => {
+  const handlePaperworkSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
+    const newStatus = actionType === 'BUY' ? 'SOLD' : 'RENTED';
+
     try {
-      let activeCustomerId = customerId;
-
-      if (!activeCustomerId) {
-        const custRes = await axios.post(`${API_BASE}/customers/`, customerForm);
-        activeCustomerId = custRes.data.customer_id;
-      }
-
-      if (actionType === 'BUY') {
-        const saleRes = await axios.post(`${API_BASE}/sales/`, {
-          car: selectedCar.vin,
-          customer: activeCustomerId,
-          payment_method: paymentMethod,
-        });
-        setReceipt({ type: 'PURCHASE RECEIPT', data: saleRes.data });
-      } else {
-        const rentRes = await axios.post(`${API_BASE}/rentals/`, {
-          car: selectedCar.vin,
-          customer: activeCustomerId,
-          start_date: startDate,
-          end_date: endDate,
-          payment_method: paymentMethod,
-        });
-        setReceipt({ type: 'RENTAL RECEIPT', data: rentRes.data });
-      }
-
-      fetchCars();
+      await fetch(`${API_BASE}/api/cars/${selectedCar.id}/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
     } catch (err) {
-      alert('Checkout failed. Check console or verify all fields are filled.');
-      console.error(err.response?.data || err);
-    } finally {
-      setLoading(false);
+      console.error('Backend update failed:', err);
     }
+
+    setCars((prev) =>
+      prev.map((c) => (c.id === selectedCar.id ? { ...c, status: newStatus } : c))
+    );
+    setPaperworkSubmitted(true);
+  };
+
+  const handleTestDriveSubmit = (e) => {
+    e.preventDefault();
+    setTestDriveSuccess(true);
+    setTimeout(() => {
+      setTestDriveSuccess(false);
+      setTestDriveForm({
+        carId: '',
+        fullName: '',
+        phone: '',
+        email: '',
+        preferredDate: '',
+        preferredTime: '10:00 AM',
+      });
+    }, 4000);
   };
 
   const filteredCars = cars.filter((car) => {
-    const matchesStatus = filterStatus === 'all' || car.status === filterStatus;
-    const matchesSearch = `${car.make} ${car.model} ${car.year}`
-      .toLowerCase()
-      .includes(searchTerm.toLowerCase());
-    return matchesStatus && matchesSearch;
+    if (filter === 'ALL') return true;
+    return String(car.status || '').toUpperCase() === filter;
   });
 
+  const availableCars = cars.filter(
+    (c) => String(c.status || '').toUpperCase() === 'AVAILABLE'
+  );
+
   return (
-    <div className="container">
-      <header className="navbar">
-        <h1>AutoDrive Dealership</h1>
-        <p>Buy or Rent Your Next Vehicle</p>
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      {/* 1. WELCOME HERO SEGMENT */}
+      <header className="bg-slate-950 text-white">
+        <div className="max-w-6xl mx-auto px-6 py-24 text-center flex flex-col items-center">
+          <span className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-3">
+            AutoDrive Dealership
+          </span>
+          <h1 className="text-4xl md:text-5xl font-bold text-white max-w-2xl leading-tight">
+            Find the Right Car to Own or Drive Today
+          </h1>
+          <p className="mt-4 text-slate-300 max-w-xl">
+            Explore our live dealership inventory, complete purchase or rental paperwork online, or book a test drive.
+          </p>
+          <div className="mt-8 flex flex-wrap justify-center gap-4">
+            <button
+              onClick={scrollToCollection}
+              className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-7 py-3.5 rounded-xl transition cursor-pointer"
+            >
+              Explore Collection
+            </button>
+            <a
+              href="#test-drive"
+              className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-7 py-3.5 rounded-xl transition"
+            >
+              Register Test Drive
+            </a>
+          </div>
+        </div>
       </header>
 
-      <div className="controls">
-        <input
-          type="text"
-          placeholder="Search make, model, or year..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-          <option value="available">Available Stock</option>
-          <option value="all">All Vehicles</option>
-          <option value="rented">Rented</option>
-          <option value="sold">Sold</option>
-        </select>
-      </div>
-
-      <div className="car-grid">
-        {filteredCars.map((car) => (
-          <div key={car.vin} className="car-card">
-            <div className="card-header">
-              <span className={`badge ${car.status}`}>{car.status.toUpperCase()}</span>
-              <span className="condition">{car.condition.toUpperCase()}</span>
-            </div>
-            <h3>{car.year} {car.make} {car.model}</h3>
-            <p className="vin">VIN: {car.vin}</p>
-            <ul className="specs">
-              <li><strong>Color:</strong> {car.color}</li>
-              <li><strong>Mileage:</strong> {car.mileage.toLocaleString()} km</li>
-              <li><strong>Buy Price:</strong> ${Number(car.price).toLocaleString()}</li>
-              <li><strong>Rent Rate:</strong> ${Number(car.rent_price_per_day).toLocaleString()} / day</li>
-            </ul>
-
-            {car.status === 'available' ? (
-              <div className="card-actions">
-                <button className="btn-buy" onClick={() => handleSelectCar(car, 'BUY')}>
-                  Buy Car
-                </button>
-                <button className="btn-rent" onClick={() => handleSelectCar(car, 'RENT')}>
-                  Rent Car
-                </button>
-              </div>
-            ) : (
-              <button className="btn-disabled" disabled>
-                Unavailable ({car.status})
-              </button>
-            )}
+      {/* 2. CAR COLLECTION FROM DATABASE */}
+      <main ref={collectionRef} className="max-w-6xl mx-auto px-6 py-16">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-10">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-900">Our Vehicle Collection</h2>
+            <p className="text-sm text-slate-600 mt-1">
+              Live vehicles from our dealership database
+            </p>
           </div>
-        ))}
-      </div>
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="bg-slate-900 text-white text-sm font-medium px-4 py-2.5 rounded-lg"
+          >
+            <option value="AVAILABLE">Available Stock</option>
+            <option value="ALL">All Vehicles</option>
+            <option value="SOLD">Sold</option>
+            <option value="RENTED">Rented</option>
+          </select>
+        </div>
 
-      {selectedCar && (
-        <div className="modal-backdrop">
-          <div className="modal-content">
-            <button className="close-btn" onClick={() => setSelectedCar(null)}>×</button>
+        {loading && (
+          <p className="text-center text-slate-500 py-12">Loading vehicles from database...</p>
+        )}
 
-            {!receipt ? (
-              <form onSubmit={handleCheckout}>
-                <h2>{actionType === 'BUY' ? 'Purchase Vehicle' : 'Rent Vehicle'}</h2>
-                <p className="selected-summary">
-                  {selectedCar.year} {selectedCar.make} {selectedCar.model} (VIN: {selectedCar.vin})
-                </p>
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-sm mb-6">
+            {error}
+          </div>
+        )}
 
-                <div className="form-group lookup-group">
-                  <label>Email Address (Check if returning customer)</label>
-                  <div className="lookup-row">
-                    <input
-                      type="email"
-                      required
-                      placeholder="customer@example.com"
-                      value={customerForm.email}
-                      onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
-                    />
-                    <button type="button" onClick={handleCustomerLookup} className="btn-lookup">
-                      Check Email
+        {!loading && !error && filteredCars.length === 0 && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-600">
+            No vehicles found for this filter. Try switching the dropdown to{' '}
+            <button
+              onClick={() => setFilter('ALL')}
+              className="text-blue-600 font-semibold underline cursor-pointer"
+            >
+              All Vehicles
+            </button>
+            .
+          </div>
+        )}
+
+        {!loading && !error && filteredCars.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredCars.map((car) => {
+              const statusUpper = String(car.status || 'AVAILABLE').toUpperCase();
+              const isAvailable = statusUpper === 'AVAILABLE';
+
+              return (
+                <div
+                  key={car.id}
+                  className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="relative aspect-[16/10] bg-slate-100">
+                      <img
+                        src={getCarImage(car)}
+                        alt={`${car.year} ${car.make} ${car.model}`}
+                        className="w-full h-full object-cover"
+                      />
+                      <span
+                        className={`absolute top-3 left-3 text-xs font-bold px-3 py-1 rounded-full ${
+                          isAvailable
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-slate-800 text-white'
+                        }`}
+                      >
+                        {statusUpper}
+                      </span>
+                      {car.condition && (
+                        <span className="absolute top-3 right-3 text-xs font-bold px-2.5 py-1 rounded-md bg-white/90 text-slate-700 uppercase">
+                          {car.condition}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="p-6 text-center">
+                      <h3 className="text-xl font-bold text-slate-900">
+                        {car.year} {car.make} {car.model}
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">VIN: {car.vin}</p>
+
+                      <div className="space-y-1.5 text-sm text-slate-700 border-t border-slate-100 mt-4 pt-4">
+                        <p>
+                          <strong className="text-slate-900">Color:</strong> {car.color}
+                        </p>
+                        <p>
+                          <strong className="text-slate-900">Mileage:</strong>{' '}
+                          {Number(car.mileage).toLocaleString()} km
+                        </p>
+                        <p>
+                          <strong className="text-slate-900">Buy Price:</strong> $
+                          {Number(car.buy_price).toLocaleString()}
+                        </p>
+                        <p>
+                          <strong className="text-slate-900">Rent Rate:</strong> ${car.rent_rate} / day
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 px-6 pb-6">
+                    <button
+                      disabled={!isAvailable}
+                      onClick={() => openModal(car, 'BUY')}
+                      className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white text-sm font-medium py-2.5 rounded-lg transition cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      Buy Car
+                    </button>
+                    <button
+                      disabled={!isAvailable}
+                      onClick={() => openModal(car, 'RENT')}
+                      className="bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white text-sm font-medium py-2.5 rounded-lg transition cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      Rent Car
                     </button>
                   </div>
-                  {lookupMessage && <small className="lookup-msg">{lookupMessage}</small>}
                 </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
 
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>First Name</label>
-                    <input
-                      type="text"
-                      required
-                      disabled={isReturning}
-                      value={customerForm.first_name}
-                      onChange={(e) => setCustomerForm({ ...customerForm, first_name: e.target.value })}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Last Name</label>
-                    <input
-                      type="text"
-                      required
-                      disabled={isReturning}
-                      value={customerForm.last_name}
-                      onChange={(e) => setCustomerForm({ ...customerForm, last_name: e.target.value })}
-                    />
-                  </div>
+      {/* 3. TEST DRIVE REGISTRATION SECTION */}
+      <section id="test-drive" className="bg-white border-t border-slate-200 py-16">
+        <div className="max-w-3xl mx-auto px-6">
+          <div className="text-center mb-8">
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-900">
+              Register for a Test Drive
+            </h2>
+            <p className="text-sm text-slate-600 mt-2">
+              Choose an available car from our inventory and book your time slot.
+            </p>
+          </div>
+
+          {testDriveSuccess ? (
+            <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl p-6 text-center font-semibold">
+              Test Drive Registered! We will contact you shortly to confirm.
+            </div>
+          ) : (
+            <form
+              onSubmit={handleTestDriveSubmit}
+              className="bg-slate-50 border border-slate-200 rounded-2xl p-6 md:p-8 space-y-4"
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Vehicle
+                  </label>
+                  <select
+                    required
+                    value={testDriveForm.carId}
+                    onChange={(e) => setTestDriveForm({ ...testDriveForm, carId: e.target.value })}
+                    className="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-3.5 py-2.5 text-sm"
+                  >
+                    <option value="">-- Select an available car --</option>
+                    {availableCars.map((car) => (
+                      <option key={car.id} value={car.id}>
+                        {car.year} {car.make} {car.model} ({car.color})
+                      </option>
+                    ))}
+                  </select>
                 </div>
-
-                <div className="form-group">
-                  <label>Phone Number</label>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Full Name
+                  </label>
                   <input
                     type="text"
                     required
-                    disabled={isReturning}
-                    value={customerForm.phone}
-                    onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
+                    value={testDriveForm.fullName}
+                    onChange={(e) => setTestDriveForm({ ...testDriveForm, fullName: e.target.value })}
+                    className="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-3.5 py-2.5 text-sm"
                   />
                 </div>
-
-                <div className="form-group">
-                  <label>Address</label>
-                  <textarea
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Phone
+                  </label>
+                  <input
+                    type="tel"
                     required
-                    disabled={isReturning}
-                    value={customerForm.address}
-                    onChange={(e) => setCustomerForm({ ...customerForm, address: e.target.value })}
+                    value={testDriveForm.phone}
+                    onChange={(e) => setTestDriveForm({ ...testDriveForm, phone: e.target.value })}
+                    className="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-3.5 py-2.5 text-sm"
                   />
                 </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Preferred Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={testDriveForm.preferredDate}
+                    onChange={(e) =>
+                      setTestDriveForm({ ...testDriveForm, preferredDate: e.target.value })
+                    }
+                    className="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-3.5 py-2.5 text-sm"
+                  />
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-3 rounded-xl transition cursor-pointer"
+              >
+                Confirm Test Drive Booking
+              </button>
+            </form>
+          )}
+        </div>
+      </section>
 
-                {actionType === 'RENT' && (
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label>Start Date</label>
+      {/* 4. PURCHASE / RENTAL PAPERWORK MODAL */}
+      {selectedCar && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4">
+          <div className="bg-white text-slate-900 rounded-2xl max-w-lg w-full p-6 md:p-8 shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-start border-b border-slate-100 pb-4 mb-5">
+              <div>
+                <span className="text-xs font-bold uppercase text-blue-600">
+                  {actionType === 'BUY' ? 'Purchase Paperwork' : 'Rental Agreement'}
+                </span>
+                <h3 className="text-xl font-bold text-slate-900 mt-0.5">
+                  {selectedCar.year} {selectedCar.make} {selectedCar.model}
+                </h3>
+              </div>
+              <button
+                onClick={closeModal}
+                className="text-slate-400 hover:text-slate-700 text-xl font-bold cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+
+            {paperworkSubmitted ? (
+              <div className="text-center py-6 space-y-4">
+                <h4 className="text-lg font-bold text-emerald-700">Paperwork Submitted!</h4>
+                <p className="text-sm text-slate-600">
+                  The {selectedCar.year} {selectedCar.make} {selectedCar.model} has been marked as{' '}
+                  <strong>{actionType === 'BUY' ? 'SOLD' : 'RENTED'}</strong>.
+                </p>
+                <button
+                  onClick={closeModal}
+                  className="bg-slate-900 text-white text-sm font-medium px-6 py-2.5 rounded-lg cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handlePaperworkSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Full Legal Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={paperworkForm.fullName}
+                    onChange={(e) => setPaperworkForm({ ...paperworkForm, fullName: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                      ID / License #
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={paperworkForm.licenseOrId}
+                      onChange={(e) =>
+                        setPaperworkForm({ ...paperworkForm, licenseOrId: e.target.value })
+                      }
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                      Phone
+                    </label>
+                    <input
+                      type="tel"
+                      required
+                      value={paperworkForm.phone}
+                      onChange={(e) => setPaperworkForm({ ...paperworkForm, phone: e.target.value })}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Address
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={paperworkForm.address}
+                    onChange={(e) => setPaperworkForm({ ...paperworkForm, address: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                {actionType === 'BUY' ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                      Payment Method
+                    </label>
+                    <select
+                      value={paperworkForm.paymentMethod}
+                      onChange={(e) =>
+                        setPaperworkForm({ ...paperworkForm, paymentMethod: e.target.value })
+                      }
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    >
+                      <option>Bank Transfer</option>
+                      <option>Cash at Dealership</option>
+                      <option>Dealership Financing</option>
+                    </select>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                        Pickup Date
+                      </label>
                       <input
                         type="date"
                         required
-                        value={startDate}
-                        onChange={(e) => setStartDate(e.target.value)}
+                        value={paperworkForm.pickupDate}
+                        onChange={(e) =>
+                          setPaperworkForm({ ...paperworkForm, pickupDate: e.target.value })
+                        }
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
                       />
                     </div>
-                    <div className="form-group">
-                      <label>End Date</label>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                        Days
+                      </label>
                       <input
-                        type="date"
+                        type="number"
+                        min="1"
                         required
-                        min={startDate}
-                        value={endDate}
-                        onChange={(e) => setEndDate(e.target.value)}
+                        value={paperworkForm.rentalDays}
+                        onChange={(e) =>
+                          setPaperworkForm({ ...paperworkForm, rentalDays: Number(e.target.value) })
+                        }
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
                       />
                     </div>
                   </div>
                 )}
-
-                <div className="form-group">
-                  <label>Payment Method</label>
-                  <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
-                    <option value="Credit Card">Credit Card</option>
-                    <option value="Cash">Cash</option>
-                    <option value="Bank Transfer">Bank Transfer</option>
-                  </select>
+                <label className="flex items-start gap-2 text-xs text-slate-600">
+                  <input
+                    type="checkbox"
+                    required
+                    checked={paperworkForm.agreedToTerms}
+                    onChange={(e) =>
+                      setPaperworkForm({ ...paperworkForm, agreedToTerms: e.target.checked })
+                    }
+                    className="mt-0.5"
+                  />
+                  <span>I confirm my details are accurate and agree to the dealership terms.</span>
+                </label>
+                <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={closeModal}
+                    className="px-4 py-2 text-sm text-slate-600 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg cursor-pointer"
+                  >
+                    Submit Paperwork
+                  </button>
                 </div>
-
-                <div className="bill-preview">
-                  <span>Calculated Total Bill:</span>
-                  <strong>${calculateEstimatedBill().toLocaleString()}</strong>
-                </div>
-
-                <button type="submit" className="btn-submit" disabled={loading}>
-                  {loading ? 'Processing...' : 'Confirm & Generate Receipt'}
-                </button>
               </form>
-            ) : (
-              <div className="receipt-box">
-                <h2>{receipt.type}</h2>
-                <hr />
-                <p><strong>Receipt ID:</strong> #{receipt.data.sale_id || receipt.data.rental_id}</p>
-                <p><strong>Customer:</strong> {receipt.data.customer_details?.first_name} {receipt.data.customer_details?.last_name}</p>
-                <p><strong>Email:</strong> {receipt.data.customer_details?.email}</p>
-                <p><strong>Phone:</strong> {receipt.data.customer_details?.phone}</p>
-                <hr />
-                <p><strong>Vehicle:</strong> {receipt.data.car_details?.year} {receipt.data.car_details?.make} {receipt.data.car_details?.model}</p>
-                <p><strong>VIN:</strong> {receipt.data.car}</p>
-                {receipt.data.start_date && (
-                  <p><strong>Rental Period:</strong> {receipt.data.start_date} to {receipt.data.end_date}</p>
-                )}
-                <p><strong>Payment Method:</strong> {receipt.data.payment_method}</p>
-                <div className="receipt-total">
-                  Total Paid: ${Number(receipt.data.sale_price || receipt.data.total_cost).toLocaleString()}
-                </div>
-                <button className="btn-submit" onClick={() => window.print()}>
-                  Print Receipt
-                </button>
-              </div>
             )}
           </div>
         </div>
@@ -340,5 +555,3 @@ function App() {
     </div>
   );
 }
-
-export default App;
