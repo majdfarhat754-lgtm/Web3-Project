@@ -12,6 +12,7 @@ export default function App() {
   const [selectedCar, setSelectedCar] = useState(null);
   const [actionType, setActionType] = useState(null);
   const [paperworkSubmitted, setPaperworkSubmitted] = useState(false);
+  const [paperworkError, setPaperworkError] = useState('');
   const [paperworkForm, setPaperworkForm] = useState({
     fullName: '',
     phone: '',
@@ -72,6 +73,7 @@ export default function App() {
     setSelectedCar(car);
     setActionType(type);
     setPaperworkSubmitted(false);
+    setPaperworkError('');
     setPaperworkForm({
       fullName: '',
       phone: '',
@@ -91,22 +93,25 @@ export default function App() {
 
   const handlePaperworkSubmit = async (e) => {
     e.preventDefault();
-    const newStatus = actionType === 'BUY' ? 'SOLD' : 'RENTED';
+    const newStatus = actionType === 'BUY' ? 'sold' : 'rented';
+    setPaperworkError('');
 
     try {
-      await fetch(`${API_BASE}/api/cars/${selectedCar.id}/`, {
+      const res = await fetch(`${API_BASE}/api/cars/${encodeURIComponent(selectedCar.vin)}/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const updatedCar = await res.json();
+      setCars((prev) =>
+        prev.map((car) => (car.vin === selectedCar.vin ? updatedCar : car))
+      );
+      setPaperworkSubmitted(true);
     } catch (err) {
       console.error('Backend update failed:', err);
+      setPaperworkError(`Could not complete the transaction. ${err.message}`);
     }
-
-    setCars((prev) =>
-      prev.map((c) => (c.id === selectedCar.id ? { ...c, status: newStatus } : c))
-    );
-    setPaperworkSubmitted(true);
   };
 
   const handleTestDriveSubmit = (e) => {
@@ -217,7 +222,7 @@ export default function App() {
 
               return (
                 <div
-                  key={car.id}
+                  key={car.vin}
                   className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col justify-between"
                 >
                   <div>
@@ -259,10 +264,11 @@ export default function App() {
                         </p>
                         <p>
                           <strong className="text-slate-900">Buy Price:</strong> $
-                          {Number(car.buy_price).toLocaleString()}
+                          {Number(car.price || 0).toLocaleString()}
                         </p>
                         <p>
-                          <strong className="text-slate-900">Rent Rate:</strong> ${car.rent_rate} / day
+                          <strong className="text-slate-900">Rent Rate:</strong> $
+                          {Number(car.rent_price_per_day || 0).toLocaleString()} / day
                         </p>
                       </div>
                     </div>
@@ -325,7 +331,7 @@ export default function App() {
                   >
                     <option value="">-- Select an available car --</option>
                     {availableCars.map((car) => (
-                      <option key={car.id} value={car.id}>
+                      <option key={car.vin} value={car.vin}>
                         {car.year} {car.make} {car.model} ({car.color})
                       </option>
                     ))}
@@ -402,6 +408,21 @@ export default function App() {
               </button>
             </div>
 
+            <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-5 text-sm text-slate-700">
+              {actionType === 'BUY' ? (
+                <strong>Purchase Price: ${Number(selectedCar.price || 0).toLocaleString()}</strong>
+              ) : (
+                <strong>
+                  Rental Total: $
+                  {(
+                    Number(selectedCar.rent_price_per_day || 0) *
+                    Number(paperworkForm.rentalDays || 0)
+                  ).toLocaleString()}
+                  {' '}({paperworkForm.rentalDays} days)
+                </strong>
+              )}
+            </div>
+
             {paperworkSubmitted ? (
               <div className="text-center py-6 space-y-4">
                 <h4 className="text-lg font-bold text-emerald-700">Paperwork Submitted!</h4>
@@ -418,6 +439,11 @@ export default function App() {
               </div>
             ) : (
               <form onSubmit={handlePaperworkSubmit} className="space-y-4">
+                {paperworkError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">
+                    {paperworkError}
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                     Full Legal Name
