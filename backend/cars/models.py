@@ -22,6 +22,7 @@ class Car(models.Model):
     rent_price_per_day = models.DecimalField(max_digits=8, decimal_places=2)
     condition = models.CharField(max_length=10, choices=CONDITION_CHOICES)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='available')
+    image = models.ImageField(upload_to='cars/', null=True, blank=True)
 
     def __str__(self):
         return f"{self.year} {self.make} {self.model} [VIN: {self.vin}]"
